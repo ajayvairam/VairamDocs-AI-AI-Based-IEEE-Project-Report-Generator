@@ -11,7 +11,7 @@ import {
   TeamMember
 } from './types';
 import { ReportPreview } from './components/ReportPreview';
-import { generateSectionContent, refineText } from './services/geminiService';
+import { generateSectionContent, refineText, exportDocx } from './services/geminiService';
 import { 
   Printer, 
   Sparkles, 
@@ -41,8 +41,6 @@ import {
   Zap,
   GraduationCap
 } from 'lucide-react';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, ImageRun, SectionType } from 'docx';
-import saveAs from 'file-saver';
 
 // --- Landing Page Component ---
 
@@ -405,220 +403,20 @@ export default function App() {
   };
 
   const handleDocxDownload = async () => {
-    
-    // --- Helper: Parse Markdown for DOCX (TextRuns) ---
-    // Converts "some **bold** text" into [TextRun("some "), TextRun("bold", bold: true), TextRun(" text")]
-    const parseText = (text: string, options: any = {}): TextRun[] => {
-        if (!text) return [];
-        const parts = text.split(/(\*\*.*?\*\*)/g);
-        return parts.map(part => {
-            if (part.startsWith('**') && part.endsWith('**')) {
-                return new TextRun({ 
-                    text: part.slice(2, -2), 
-                    bold: true, 
-                    font: "Times New Roman",
-                    size: options.size || 20, // default 10pt (20 half-points)
-                    ...options 
-                });
-            }
-            return new TextRun({ 
-                text: part, 
-                font: "Times New Roman",
-                size: options.size || 20, 
-                ...options 
-            });
-        });
-    };
-
-    // --- Helper: Create Section Heading ---
-    const createHeading = (text: string, level: number = 1) => 
-      new Paragraph({
-        text: text.toUpperCase(),
-        heading: level === 1 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2,
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 240, after: 120 },
-      });
-
-    // --- Helper: Create Body Text Paragraph ---
-    const createText = (text: string) => 
-      new Paragraph({
-        children: parseText(text || ""),
-        alignment: AlignmentType.JUSTIFIED,
-        spacing: { after: 200 }
-      });
-
-    // --- Section 1: Header (Single Column) ---
-    // Contains Title, Team Members, Institution, Guide
-    
-    const teamParagraphs = reportData.teamMembers.map(m => 
-      new Paragraph({
-        children: [
-            new TextRun({ text: m.name || "Student Name", bold: true, font: "Times New Roman", size: 22 }),
-            new TextRun({ text: ` (${m.registerNumber || "Reg. No"})`, font: "Times New Roman", size: 20 })
-        ],
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 60 }
-      })
-    );
-
-    const institutionParagraphs = [
-        new Paragraph({
-            children: [new TextRun({ text: reportData.department, font: "Times New Roman", size: 20, italics: true })],
-            alignment: AlignmentType.CENTER,
-        }),
-        new Paragraph({
-            children: [new TextRun({ text: reportData.collegeName, font: "Times New Roman", size: 20 })],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 240 }
-        })
-    ];
-
-    const headerChildren: any[] = [
-        new Paragraph({
-            children: [new TextRun({ text: reportData.title || "TITLE", bold: true, font: "Times New Roman", size: 48 })], // 24pt
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 240 }
-        }),
-        ...teamParagraphs,
-        ...institutionParagraphs,
-    ];
-
-    if(reportData.guideName) {
-         headerChildren.push(new Paragraph({
-            children: [
-                new TextRun({ text: "Guided by: ", italics: true, font: "Times New Roman", size: 22 }),
-                new TextRun({ text: reportData.guideName, bold: true, font: "Times New Roman", size: 22 })
-            ],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 400 }
-         }));
+    try {
+      const blob = await exportDocx(reportData, formatting);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${reportData.title || 'Report'}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Failed to download DOCX:', e);
+      alert('Failed to generate DOCX report. Please ensure the backend server is running.');
     }
-
-    // --- Section 2: Body (Double Column) ---
-    const bodyChildren: any[] = [];
-
-    // Abstract
-    bodyChildren.push(
-        new Paragraph({
-            children: [
-                new TextRun({ text: "Abstract—", bold: true, italics: true, font: "Times New Roman", size: 18 }),
-                ...parseText(reportData.abstract, { size: 18, bold: true, italics: true }) // 9pt bold italic
-            ],
-            alignment: AlignmentType.JUSTIFIED,
-            spacing: { after: 120 }
-        })
-    );
-
-    // Keywords
-    bodyChildren.push(
-        new Paragraph({
-            children: [
-                new TextRun({ text: "Keywords—", bold: true, italics: true, font: "Times New Roman", size: 18 }),
-                ...parseText(reportData.keywords, { size: 18, italics: true })
-            ],
-            alignment: AlignmentType.JUSTIFIED,
-            spacing: { after: 240 }
-        })
-    );
-
-    bodyChildren.push(createHeading("I. INTRODUCTION"));
-    bodyChildren.push(createText(reportData.introduction));
-    
-    bodyChildren.push(createHeading("II. PROBLEM STATEMENT"));
-    bodyChildren.push(createText(reportData.problemStatement));
-    
-    bodyChildren.push(createHeading("III. OBJECTIVES"));
-    bodyChildren.push(createText(reportData.objectives));
-    
-    bodyChildren.push(createHeading("IV. LITERATURE REVIEW"));
-    bodyChildren.push(createText(reportData.literatureReview));
-    
-    bodyChildren.push(createHeading("V. METHODOLOGY"));
-    bodyChildren.push(createText(reportData.methodology));
-
-    if (reportData.flowchartImage) {
-        // Handle Base64 Image
-        const parts = reportData.flowchartImage.split(',');
-        const base64Data = parts[1];
-        const mime = parts[0];
-        
-        let imgType: "png" | "jpg" | "gif" | "bmp" = "png";
-        if (mime.includes("jpeg") || mime.includes("jpg")) imgType = "jpg";
-        else if (mime.includes("gif")) imgType = "gif";
-        else if (mime.includes("bmp")) imgType = "bmp";
-        
-        try {
-          bodyChildren.push(new Paragraph({
-              children: [
-                  new ImageRun({
-                      data: Uint8Array.from(atob(base64Data), c => c.charCodeAt(0)),
-                      transformation: {
-                          width: 250, // Approx column width
-                          height: 200, // Reasonable height
-                      },
-                      type: imgType
-                  }),
-              ],
-              alignment: AlignmentType.CENTER,
-              spacing: { before: 200, after: 100 }
-          }));
-          bodyChildren.push(new Paragraph({
-              children: [new TextRun({ text: "Fig. 1. Proposed System Architecture", font: "Times New Roman", size: 16, italics: true, bold: true })],
-              alignment: AlignmentType.CENTER,
-              spacing: { after: 200 }
-          }));
-        } catch (e) {
-          console.error("Error adding image to docx", e);
-        }
-    }
-
-    bodyChildren.push(createHeading("VI. RESULTS"));
-    bodyChildren.push(createText(reportData.results));
-    
-    bodyChildren.push(createHeading("VII. CONCLUSION"));
-    bodyChildren.push(createText(reportData.conclusion));
-    
-    bodyChildren.push(createHeading("VIII. FUTURE SCOPE"));
-    bodyChildren.push(createText(reportData.futureScope));
-    
-    bodyChildren.push(createHeading("REFERENCES"));
-    // References usually smaller font
-    bodyChildren.push(
-      new Paragraph({
-        children: parseText(reportData.references, { size: 16 }), // 8pt
-        alignment: AlignmentType.JUSTIFIED,
-        spacing: { after: 200 }
-      })
-    );
-
-
-    const doc = new Document({
-      sections: [
-        // Section 1: Header (1 Column)
-        {
-          properties: {
-             page: {
-                 margin: { top: 1080, bottom: 1440, left: 1080, right: 1080 }
-             }
-          },
-          children: headerChildren,
-        },
-        // Section 2: Body (2 Columns) - Continuous
-        {
-          properties: {
-             type: SectionType.CONTINUOUS,
-             column: formatting.columns === 2 ? { count: 2, space: 425 } : undefined, // ~0.75cm gap
-             page: {
-                 margin: { top: 1080, bottom: 1440, left: 1080, right: 1080 }
-             }
-          },
-          children: bodyChildren,
-        }
-      ],
-    });
-
-    const blob = await Packer.toBlob(doc);
-    saveAs(blob, `${reportData.title || "Report"}.docx`);
   };
 
   const handleAIGenerate = async (section: keyof ReportData) => {
